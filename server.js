@@ -9,10 +9,27 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
 
+/* ROTA RAIZ */
 app.get("/", (req, res) => {
   res.send("Chatbot Arsenal está rodando.");
 });
 
+/* VALIDAÇÃO DO WEBHOOK META */
+app.get("/webhook", (req, res) => {
+  const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
+
+  const mode = req.query["hub.mode"];
+  const token = req.query["hub.verify_token"];
+  const challenge = req.query["hub.challenge"];
+
+  if (mode && token === VERIFY_TOKEN) {
+    return res.status(200).send(challenge);
+  }
+
+  res.sendStatus(403);
+});
+
+/* RECEBIMENTO DE MENSAGENS */
 app.post("/webhook", async (req, res) => {
   try {
     const message =
@@ -68,7 +85,7 @@ app.post("/webhook", async (req, res) => {
 
     res.sendStatus(200);
   } catch (error) {
-    console.error(error);
+    console.error(error.response?.data || error.message);
     res.sendStatus(500);
   }
 });
