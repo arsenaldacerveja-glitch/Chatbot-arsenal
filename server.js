@@ -5,446 +5,257 @@ require("dotenv").config();
 const app = express();
 app.use(express.json());
 
+// ===== ENV =====
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
 
-if (!OPENAI_API_KEY || !WHATSAPP_TOKEN || !PHONE_NUMBER_ID || !VERIFY_TOKEN) {
-  console.warn("⚠️ Variáveis .env faltando. Confira OPENAI_API_KEY, WHATSAPP_TOKEN, PHONE_NUMBER_ID, VERIFY_TOKEN");
+const ARSENAL_SITE_URL = process.env.ARSENAL_SITE_URL || "https://SEU-SITE-AQUI";
+
+// Contatos
+const RAFA_PHONE = process.env.RAFA_PHONE || "+5535991574989"; // seu número (fornecedores)
+const KAIQUE_PHONE = process.env.KAIQUE_PHONE || "+5535999022256"; // vendas online e curadoria
+const KELVIN_PHONE = process.env.KELVIN_PHONE || ""; // influencers (preencher no .env)
+
+// Imagem da régua (Drive direto)
+const REGUA_IMAGE_URL =
+  process.env.REGUA_IMAGE_URL ||
+  "https://drive.google.com/uc?export=view&id=1phCq4KPWOA3z7_xLWqUA50eZtNAKcNYQ";
+
+// ===== Helpers =====
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/* -----------------------------
-   DADOS DO NEGÓCIO (fonte única)
--------------------------------- */
-const BUSINESS = {
-  arsenal: {
-    name: "Arsenal da Cerveja",
-    city: "Monte Verde - MG",
-    description:
-      "Loja especializada em cervejas especiais, com mais de 200 rótulos entre nacionais e importadas. Duas lojas em Monte Verde: uma mais focada em experiência com porções e outra mais focada em loja e kits.",
-    stores: {
-      galeriaSuica: {
-        label: "Arsenal da Cerveja - Galeria Suíça",
-        address: "Avenida Monte Verde, 858, Galeria Suíça, Loja 4 (próximo ao lago)",
-        mapsLink:
-          "https://www.google.com/maps/search/?api=1&query=Avenida%20Monte%20Verde%2C%20858%2C%20Monte%20Verde%20MG%20Galeria%20Su%C3%AD%C3%A7a%20Loja%204",
-        hours: [
-          { day: "Segunda", hours: "Fechado" },
-          { day: "Terça", hours: "Fechado" },
-          { day: "Quarta", hours: "10h às 19h" },
-          { day: "Quinta", hours: "10h às 19h" },
-          { day: "Sexta", hours: "10h às 23h" },
-          { day: "Sábado", hours: "10h às 00h" },
-          { day: "Domingo", hours: "10h às 19h" },
-        ],
-      },
-      vilaGermanica: {
-        label: "Arsenal Store - Galeria Vila Germânica",
-        address: "Avenida Monte Verde, 1057, Galeria Vila Germânica (próximo ao Bradesco)",
-        mapsLink:
-          "https://www.google.com/maps/search/?api=1&query=Avenida%20Monte%20Verde%2C%201057%2C%20Monte%20Verde%20MG%20Galeria%20Vila%20Germ%C3%A2nica%20Bradesco",
-        hours: [
-          { day: "Domingo a Quinta", hours: "10h às 19h" },
-          { day: "Sexta", hours: "10h às 23h" },
-          { day: "Sábado", hours: "10h às 00h" },
-        ],
-      },
-    },
-    tasting: {
-      name: "Régua Degustação",
-      howItWorks:
-        "Você escolhe 4 estilos entre 6 opções de chope. Cada taça tem 200ml (total 800ml).",
-      price: "R$60",
-      note: "Dá para dividir em casal.",
-    },
-    kitInstagram: {
-      name: "Kit especial do anúncio",
-      description:
-        "Kit com 2 cervejas artesanais da casa (Pilsen), por R$39,90.",
-      price: "R$39,90",
-      reservationPolicy:
-        "Normalmente não precisa reservar, é só chegar e pegar. Atendemos por ordem de chegada.",
-    },
-    policies: {
-      reservations: "Não trabalhamos com reservas. Atendimento por ordem de chegada.",
-      pet: "Sim, aceitamos pets.",
-    },
-    onlineSales: {
-      enabled: true,
-      personName: "Kaique",
-      role: "sommelier responsável pela curadoria",
-      phone: "+55 35 99902-2256",
-      shipping: "Envio via PAC ou Sedex para todo o Brasil.",
-    },
-    influencers: {
-      personName: "Kelvin",
-      role: "equipe Socialize (parcerias e influencers)",
-      phone: "+55 35 99189-7704",
-    },
-  },
-
-  smartTap: {
-    name: "SmartTap",
-    description:
-      "Máquina autônoma de chope. Pagamento via Pix e liberação automática. Possui validação de CPF que bloqueia tentativas de compra por menor de 18 anos. Também conta com sistema de lavagem automática de alta pressão.",
-    commonIssues: [
-      "chope não saiu",
-      "chope espumando",
-      "pix pago e não liberou",
-      "estorno não apareceu ainda",
-    ],
-    franchise: {
-      status:
-        "Estamos estruturando a COF (Circular de Oferta de Franquia).",
-      leadFields:
-        "Para receber informações quando estiver liberado: nome completo, telefone e e-mail.",
-    },
-  },
-};
-
-/* -----------------------------
-   MEMÓRIA / CONTEXTO POR USUÁRIO
--------------------------------- */
-const sessions = new Map(); // from -> session
-const processedMessages = new Set(); // message.id dedupe (memória curta)
-
-const SESSION_TTL_MS = 1000 * 60 * 30; // 30 min
-const MAX_HISTORY = 12;
-
-function now() {
-  return Date.now();
+function humanDelayMs(text) {
+  // 650ms a 1650ms + bônus por tamanho (até 1200ms)
+  const base = 650 + Math.floor(Math.random() * 1000);
+  const extra = Math.min(1200, Math.floor((text?.length || 0) * 10));
+  return base + extra;
 }
 
-function normalize(text) {
-  return (text || "")
+function normalizeText(s = "") {
+  return String(s)
     .toLowerCase()
-    .trim()
     .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "");
+    .replace(/\p{Diacritic}/gu, "")
+    .trim();
 }
 
-function getSession(from) {
-  const s = sessions.get(from);
-  if (!s) {
-    const fresh = {
-      lastSeen: now(),
-      state: { lastTopic: null, lastStore: null, waiting: null },
-      history: [],
-    };
-    sessions.set(from, fresh);
-    return fresh;
+function isGreeting(msg) {
+  const t = normalizeText(msg);
+  return (
+    t === "oi" ||
+    t === "ola" ||
+    t === "bom dia" ||
+    t === "boa tarde" ||
+    t === "boa noite" ||
+    t.startsWith("oi ") ||
+    t.startsWith("ola ")
+  );
+}
+
+// ===== Conversation memory (in-memory) =====
+// Para produção: trocar por Redis/DB.
+const sessions = new Map();
+// Estrutura: { history: [{role, content}], lastActive: Date }
+const MAX_TURNS = 12; // 6 user + 6 assistant
+
+function getSession(userId) {
+  if (!sessions.has(userId)) {
+    sessions.set(userId, { history: [], lastActive: Date.now() });
   }
-  s.lastSeen = now();
-  return s;
+  return sessions.get(userId);
 }
 
-function cleanupSessions() {
-  const t = now();
-  for (const [k, v] of sessions.entries()) {
-    if (t - v.lastSeen > SESSION_TTL_MS) sessions.delete(k);
-  }
-  // processedMessages pode crescer. Limpeza simples:
-  if (processedMessages.size > 5000) processedMessages.clear();
-}
-
-setInterval(cleanupSessions, 60 * 1000);
-
-function pushHistory(session, role, content) {
-  session.history.push({ role, content });
-  if (session.history.length > MAX_HISTORY) {
-    session.history = session.history.slice(session.history.length - MAX_HISTORY);
+function pushHistory(userId, role, content) {
+  const s = getSession(userId);
+  s.history.push({ role, content });
+  s.lastActive = Date.now();
+  // corta histórico
+  if (s.history.length > MAX_TURNS) {
+    s.history = s.history.slice(s.history.length - MAX_TURNS);
   }
 }
 
-/* -----------------------------
-   WHATSAPP SEND
--------------------------------- */
-async function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms));
+function shouldSendReguaImage(userMessage, assistantText) {
+  const t = normalizeText(userMessage);
+  const a = normalizeText(assistantText);
+
+  const triggers = [
+    "regua",
+    "degustacao",
+    "degustar",
+    "recomendacao",
+    "recomenda",
+    "primeira vez",
+    "o que voces recomendam",
+    "carro chefe",
+    "experiencia",
+    "chopp",
+    "chope",
+  ];
+
+  const mentioned = triggers.some((k) => t.includes(k) || a.includes(k));
+  // Evita mandar imagem em casos técnicos da SmartTap ou fornecedores etc.
+  const exclude = ["smarttap", "smart tap", "pix", "estorno", "cpf", "erro", "maquina"];
+  const excluded = exclude.some((k) => t.includes(k) || a.includes(k));
+
+  return mentioned && !excluded;
 }
 
-async function sendWhatsAppText(to, body) {
-  // delay natural
-  const delay = 700 + Math.floor(Math.random() * 900);
-  await sleep(delay);
-
+// ===== WhatsApp senders =====
+async function sendWhatsAppText(to, text) {
   await axios.post(
     `https://graph.facebook.com/v18.0/${PHONE_NUMBER_ID}/messages`,
     {
       messaging_product: "whatsapp",
       to,
-      text: { body },
+      text: { body: text },
     },
     {
       headers: {
         Authorization: `Bearer ${WHATSAPP_TOKEN}`,
         "Content-Type": "application/json",
       },
-      timeout: 15000,
+      timeout: 20000,
     }
   );
 }
 
-async function sendMapsLink(to, storeKey) {
-  const store = BUSINESS.arsenal.stores[storeKey];
-  const txt =
-    `${store.label}\n` +
-    `${store.address}\n` +
-    `Mapa: ${store.mapsLink}`;
-  await sendWhatsAppText(to, txt);
-}
-
-/* -----------------------------
-   HELPERS DE RESPOSTA PRONTA
--------------------------------- */
-function formatHours(hoursArr) {
-  return hoursArr.map((h) => `• ${h.day}: ${h.hours}`).join("\n");
-}
-
-function replyHoursAll() {
-  const a = BUSINESS.arsenal.stores.galeriaSuica;
-  const b = BUSINESS.arsenal.stores.vilaGermanica;
-
-  return (
-    `Horários do ${BUSINESS.arsenal.name}:\n\n` +
-    `${a.label}\n${formatHours(a.hours)}\n\n` +
-    `${b.label}\n${formatHours(b.hours)}\n\n` +
-    `Se for feriado ou feriado prolongado, a gente costuma estender e ir até mais tarde. Se você me disser a data, eu te confirmo o horário certinho.`
-  );
-}
-
-function replyAddressAll() {
-  const a = BUSINESS.arsenal.stores.galeriaSuica;
-  const b = BUSINESS.arsenal.stores.vilaGermanica;
-
-  return (
-    `Temos duas lojas em Monte Verde:\n\n` +
-    `1) ${a.label}\n${a.address}\nMapa: ${a.mapsLink}\n\n` +
-    `2) ${b.label}\n${b.address}\nMapa: ${b.mapsLink}\n\n` +
-    `Quer ir em qual hoje?`
-  );
-}
-
-function replyTasting() {
-  const t = BUSINESS.arsenal.tasting;
-  return (
-    `${t.name} funciona assim:\n` +
-    `${t.howItWorks}\n` +
-    `Valor: ${t.price}. ${t.note}\n\n` +
-    `Quer ir em qual loja hoje, Galeria Suíça ou Vila Germânica?`
-  );
-}
-
-function replyKit() {
-  const k = BUSINESS.arsenal.kitInstagram;
-  return (
-    `${k.name}:\n` +
-    `${k.description}\n` +
-    `Valor: ${k.price}.\n\n` +
-    `${k.reservationPolicy}\n` +
-    `Se você me disser em qual loja vai, eu te mando o mapa.`
-  );
-}
-
-function replyOnline() {
-  const o = BUSINESS.arsenal.onlineSales;
-  return (
-    `Enviamos sim 😊\n` +
-    `${o.shipping}\n\n` +
-    `Para te indicar certinho os rótulos e montar seu kit, chama o ${o.personName}, nosso ${o.role}:\n` +
-    `${o.phone}`
-  );
-}
-
-function replyInfluencer() {
-  const i = BUSINESS.arsenal.influencers;
-  return (
-    `Parcerias e influencers:\n` +
-    `Me manda aqui seu @ do Instagram, cidade e o que você quer propor.\n\n` +
-    `E se preferir falar direto com quem cuida disso, chama o ${i.personName} (${i.role}):\n` +
-    `${i.phone}`
-  );
-}
-
-function replySupplier() {
-  return (
-    `Fornecedores:\n` +
-    `Me manda por aqui seu catálogo, tabela/condições, prazos e cidade.\n` +
-    `Se tiver portfólio/Instagram, pode mandar também. Eu mesmo avalio e retorno.`
-  );
-}
-
-function replySmartTapHelp() {
-  return (
-    `Entendi. Vamos resolver.\n\n` +
-    `Me diga, por favor:\n` +
-    `• qual foi o problema (chope não saiu, espumou, pix não liberou, etc.)\n` +
-    `• horário aproximado\n` +
-    `• qual torneira\n\n` +
-    `Com isso eu já consigo encaminhar a verificação.\n` +
-    `Obs: quando o chope não libera, normalmente o Pix é estornado automaticamente.`
-  );
-}
-
-function replySmartTapNoCPF() {
-  return (
-    `Tranquilo 👍 não precisa enviar CPF.\n\n` +
-    `Para eu conseguir localizar mais rápido, me diga:\n` +
-    `• horário aproximado\n` +
-    `• qual torneira\n` +
-    `• valor do Pix\n\n` +
-    `Se não tiver tudo, manda o que lembrar que a gente verifica.`
-  );
-}
-
-function replyFranchiseLead() {
-  const f = BUSINESS.smartTap.franchise;
-  return (
-    `${f.status}\n\n` +
-    `${f.leadFields}\n` +
-    `Pode me mandar aqui mesmo nessa ordem:\n` +
-    `1) Nome completo\n2) Telefone\n3) E-mail\n\n` +
-    `Assim que estiver liberado, a equipe SmartTap entra em contato.`
-  );
-}
-
-/* -----------------------------
-   DETECÇÃO DE INTENÇÃO (roteador)
--------------------------------- */
-function detectIntent(msg, session) {
-  const n = normalize(msg);
-
-  // “sim”, “pode”, “me envia” precisa olhar o que estava pendente
-  if (["sim", "pode", "ok", "manda", "me envia", "envia", "pode mandar"].includes(n)) {
-    if (session.state.waiting === "MAPS_STORE_CHOICE") return "SEND_MAPS_AFTER_CHOICE";
-  }
-
-  // endereços / localização
-  if (n.includes("endereco") || n.includes("endereço") || n.includes("localizacao") || n.includes("localização") || n.includes("maps") || n.includes("como chegar")) {
-    return "ADDRESS_ALL";
-  }
-
-  // “outra loja”
-  if (n.includes("outra loja") || n.includes("segunda loja") || n.includes("loja da vila") || n.includes("vila germanica") || n.includes("bradesco")) {
-    session.state.lastStore = "vilaGermanica";
-    return "MAPS_ONE";
-  }
-  if (n.includes("galeria suica") || n.includes("suica") || n.includes("perto do lago") || n.includes("lago")) {
-    session.state.lastStore = "galeriaSuica";
-    return "MAPS_ONE";
-  }
-
-  // horários
-  if (n.includes("horario") || n.includes("horário") || n.includes("aberto") || n.includes("funcionamento") || n.includes("fecha") || n.includes("abre")) {
-    return "HOURS_ALL";
-  }
-
-  // régua degustação
-  if (n.includes("regua") || n.includes("régua") || n.includes("degustacao") || n.includes("degustação")) {
-    return "TASTING";
-  }
-
-  // kit do anúncio
-  if (n.includes("kit") || n.includes("reservar") || n.includes("anuncio") || n.includes("anúncio") || n.includes("39,90") || n.includes("39.90")) {
-    return "KIT";
-  }
-
-  // pet
-  if (n.includes("pet") || n.includes("cachorro") || n.includes("cão")) {
-    return "PET";
-  }
-
-  // reservas
-  if (n.includes("reserva") || n.includes("reservar")) {
-    return "RESERVATIONS";
-  }
-
-  // envio/online
-  if (
-    n.includes("vocês enviam") ||
-    n.includes("voces enviam") ||
-    n.includes("entrega") ||
-    n.includes("comprar online") ||
-    n.includes("sedex") ||
-    n.includes("pac") ||
-    n.includes("envio para")
-  ) {
-    return "ONLINE";
-  }
-
-  // influencers/parceria
-  if (n.includes("influencer") || n.includes("parceria") || n.includes("permuta") || n.includes("media kit") || n.includes("midiakit")) {
-    return "INFLUENCER";
-  }
-
-  // fornecedor
-  if (n.includes("fornecedor") || n.includes("representante") || n.includes("distribuidor") || n.includes("tabela") || n.includes("catalogo") || n.includes("catálogo")) {
-    return "SUPPLIER";
-  }
-
-  // SmartTap problemas
-  if (n.includes("smarttap") || n.includes("smart tap") || n.includes("chope nao saiu") || n.includes("chopp nao saiu") || n.includes("espuma") || n.includes("pix") || n.includes("estorno")) {
-    // se a pessoa fala “não vou enviar cpf”
-    if (n.includes("nao vou enviar") || n.includes("não vou enviar") || n.includes("cpf")) {
-      return "SMARTTAP_NO_CPF";
+async function sendWhatsAppImage(to, imageUrl, caption) {
+  await axios.post(
+    `https://graph.facebook.com/v18.0/${PHONE_NUMBER_ID}/messages`,
+    {
+      messaging_product: "whatsapp",
+      to,
+      type: "image",
+      image: {
+        link: imageUrl,
+        caption: caption || "",
+      },
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      timeout: 20000,
     }
-    return "SMARTTAP_HELP";
-  }
-
-  // franquia
-  if (n.includes("franquia") || n.includes("cof") || n.includes("quero ser franqueado") || n.includes("investir")) {
-    return "FRANCHISE";
-  }
-
-  return "AI";
+  );
 }
 
-/* -----------------------------
-   OPENAI (só quando não cair em fluxo)
--------------------------------- */
+// ===== System prompt (tudo que você alimentou) =====
 function buildSystemPrompt() {
-  const a = BUSINESS.arsenal;
-  const s = BUSINESS.smartTap;
+  return `
+Você é o atendimento oficial do Arsenal da Cerveja (Monte Verde) e também recebe demandas da SmartTap no mesmo WhatsApp.
+Seu objetivo é ser MUITO humano, simpático, direto, e vender a experiência sem parecer robô.
 
-  return (
-    `Você é o atendimento do ${a.name} e do ${s.name} em ${a.city}.\n` +
-    `Regras importantes:\n` +
-    `1) Não invente horário, endereço, preço, política ou informações. Use apenas os dados fornecidos.\n` +
-    `2) Não peça CPF. Para problemas SmartTap, peça horário aproximado, torneira e valor do Pix.\n` +
-    `3) Não prometa enviar "localização" se você não estiver enviando um link do Maps.\n` +
-    `4) Se o usuário disser "me envia" ou "pode", descubra o que ele quer (qual loja) antes.\n` +
-    `5) Seja direto, simpático e natural. Sem parecer robô.\n\n` +
-    `Dados oficiais:\n` +
-    `- Sobre: ${a.description}\n` +
-    `- Lojas:\n` +
-    `  * ${a.stores.galeriaSuica.label}: ${a.stores.galeriaSuica.address}\n` +
-    `    Horários: ${a.stores.galeriaSuica.hours.map(h=>`${h.day} ${h.hours}`).join("; ")}\n` +
-    `  * ${a.stores.vilaGermanica.label}: ${a.stores.vilaGermanica.address}\n` +
-    `    Horários: ${a.stores.vilaGermanica.hours.map(h=>`${h.day} ${h.hours}`).join("; ")}\n` +
-    `- Régua: ${a.tasting.howItWorks} Valor ${a.tasting.price}. ${a.tasting.note}\n` +
-    `- Reservas: ${a.policies.reservations}\n` +
-    `- Pet: ${a.policies.pet}\n` +
-    `- Kit anúncio: ${a.kitInstagram.description} (${a.kitInstagram.price}). ${a.kitInstagram.reservationPolicy}\n` +
-    `- Envio online: ${a.onlineSales.shipping}. Contato ${a.onlineSales.personName} (${a.onlineSales.role}) ${a.onlineSales.phone}\n` +
-    `- Influencers: contato ${a.influencers.personName} ${a.influencers.phone}\n` +
-    `- SmartTap: ${s.description}\n` +
-    `- Franquia SmartTap: ${s.franchise.status} Capturar lead: ${s.franchise.leadFields}\n`
-  );
+TOM:
+- Conversa natural, frases curtas, sem formalidade exagerada.
+- Use poucos emojis (no máximo 1 ou 2 por resposta quando fizer sentido).
+- Nunca diga “sou uma IA”. Nunca entregue que é bot.
+- Evite respostas longas demais: se o cliente pedir cardápio, você pode resumir e oferecer detalhes.
+
+REGRAS DE CONFIANÇA:
+- NÃO invente informação.
+- Se faltar dado, faça UMA pergunta curta para destravar.
+- Só direcione para o site como ÚLTIMO recurso (quando realmente não der para resolver).
+- Não prometa “vou verificar o que está engatado hoje” (as torneiras mudam).
+- Não repita “vou enviar localização” se já estiver passando endereço. Passe o endereço e, se possível, um link de mapa.
+
+CONTEXTO DO ARSENAL:
+- Arsenal da Cerveja é um empório especializado em cervejas especiais, com mais de 200 rótulos nacionais e importadas.
+- Tem duas lojas em Monte Verde:
+  1) Galeria Suíça (experiência): serve chopes e também porções de queijos e embutidos da região.
+     Endereço: Av Monte Verde, 858, Galeria Suíça, Loja 4 (próximo ao lago).
+     Horários: fecha segunda e terça.
+       Quarta e quinta: 10h às 19h
+       Sexta: 10h às 23h
+       Sábado: 10h às 00h
+       Domingo: 10h às 19h
+  2) Vila Germânica (foco em chope e cervejas): NÃO serve porções. É chope e cervejas para servir.
+     Endereço: Av Monte Verde, 1057, Galeria Vila Germânica (próximo ao Bradesco).
+     Horários: abre todos os dias.
+       Domingo a quinta: 10h às 19h
+       Sexta: 10h às 23h
+       Sábado: 10h às 00h
+
+CARRO-CHEFE:
+- Régua degustação (nas duas lojas):
+  Cliente escolhe 4 estilos entre as 6 torneiras, cada taça 200ml.
+  Valor: R$60,00. Pode ser dividida entre duas pessoas.
+- Quando a pessoa perguntar o que recomenda, primeira vez, degustação, etc, puxe a régua como destaque.
+
+CHOPES:
+- Nas lojas, os estilos variam e cada loja pode estar com chopes diferentes.
+  Você pode citar exemplos de estilos que costumam aparecer (sem prometer fixo): Pilsen, Witbier, American IPA, New England IPA, Double IPA, Imperial Stout, Fruitbier com maçã verde, Sour, Chopp de vinho.
+  Feche incentivando a pessoa a ir até a loja para ver o que está nas torneiras.
+- Na SmartTap (fixo): Pilsen, IPA, Dunkel, Cannabis, Chopp de vinho, Gin tônica com frutas amarelas.
+
+PETS:
+- Pets são bem-vindos.
+- Existe uma cerveja desenvolvida especialmente para pets. Convide para conhecer na loja.
+
+COPOS/TAÇAS/CANECAS:
+- Vocês vendem copos, taças e canecas, incluindo personalizados e alguns importados.
+- Quando o cliente perguntar disso, frequentemente quer comprar e receber: direcione para o Kaique (contato será inserido).
+
+KITS:
+- Existe kit com 2 cervejas (Pilsen da casa e outra opção), por R$39,90.
+- Não precisa reservar. Atendimento por ordem de chegada. Incentive a pessoa a ir.
+
+VENDAS ONLINE (ENVIO):
+- Arsenal envia para todo o Brasil, mas precisa consultar antes para ver se atende a região e alinhar o envio (PAC/Sedex).
+- Quem atende essa curadoria e vendas online é o Kaique, beer sommelier, orienta estilo, temperatura, taça, presente, e recomendações.
+- Quando for caso de compra online/cerveja específica/copo/taça, encaminhe para o Kaique.
+
+INFLUENCERS:
+- Se pedirem parceria/media kit, encaminhar para Kelvin (contato será inserido). Se não houver contato do Kelvin, peça para enviar o media kit por aqui e diga que o time vai retornar.
+
+FORNECEDORES:
+- Direcione para o responsável (Rafa) e informe o contato.
+
+SMARTTAP:
+- Pagamento via Pix pode ter atraso (sem citar tempo). Se não liberar chope, o estorno acontece automaticamente.
+- A SmartTap tem validação de CPF e bloqueia menor de 18 anos.
+- Se perguntarem de franquia: dizer que a COF está em estruturação e pedir nome completo, e-mail e telefone para retorno do time (sem prometer valores).
+- Problemas comuns: chope não saiu, espumando, não estornou. Seja calmo, peça 1 ou 2 infos (qual módulo/torneira, horário aproximado, valor, e se apareceu mensagem na tela) e diga que vai orientar.
+
+CARDÁPIO GALERIA SUÍÇA (responder só quando pedirem cardápio/porções):
+- Porções principais:
+  Tábua de frios R$110 (acompanhamentos: torradas, geleia de morango, mostarda com maracujá, molho agridoce com gengibre)
+  Mix de embutidos R$70 (acompanha: torradas, geleia de morango, mostarda com maracujá, molho de cebola e especiarias)
+  Mix de queijos R$70 (acompanha: torradas, geleia de morango, mostarda com maracujá, molho de cebola e especiarias)
+- Porções individuais:
+  Embutidos: Eisbein defumado R$40; Lombo condimentado R$40; Linguiça defumada recheada com provolone R$40; Salame R$30
+  Queijos: Brie com geleia de morango R$45; Gouda R$45; Gorgonzola R$45; Parmesão R$45
+- Sempre conectar com a régua degustação como carro-chefe.
+
+FORMATO DE SAÍDA:
+Responda SEMPRE em JSON válido no seguinte formato:
+{
+  "reply": "texto final para o cliente",
+  "confidence": 0.0 a 1.0,
+  "send_regua_image": true/false,
+  "handoff": "none" | "kaique" | "rafa" | "kelvin" | "site",
+  "one_question": "se precisar perguntar algo, coloque aqui, senão vazio"
 }
 
-async function askOpenAI(session, userMessage) {
-  const system = buildSystemPrompt();
+- Use handoff="site" APENAS como último caso.
+- Se one_question não estiver vazio, a reply deve terminar com essa pergunta.
+`.trim();
+}
 
-  // resumo do contexto em 1 bloco curto
-  const contextSummary = session.history
-    .slice(-8)
-    .map((m) => `${m.role.toUpperCase()}: ${m.content}`)
-    .join("\n");
+// ===== OpenAI call =====
+async function askOpenAI(userId, userMessage) {
+  const session = getSession(userId);
+  const systemPrompt = buildSystemPrompt();
 
   const messages = [
-    { role: "system", content: system },
-    { role: "system", content: `Contexto recente:\n${contextSummary}` },
+    { role: "system", content: systemPrompt },
+    ...session.history,
     { role: "user", content: userMessage },
   ];
 
@@ -452,7 +263,8 @@ async function askOpenAI(session, userMessage) {
     "https://api.openai.com/v1/chat/completions",
     {
       model: "gpt-4o-mini",
-      temperature: 0.4,
+      temperature: 0.5,
+      response_format: { type: "json_object" },
       messages,
     },
     {
@@ -460,18 +272,38 @@ async function askOpenAI(session, userMessage) {
         Authorization: `Bearer ${OPENAI_API_KEY}`,
         "Content-Type": "application/json",
       },
-      timeout: 20000,
+      timeout: 25000,
     }
   );
 
-  return resp.data.choices?.[0]?.message?.content?.trim() || "Consegue me explicar melhor o que você precisa?";
+  const raw = resp.data?.choices?.[0]?.message?.content || "";
+  let parsed = null;
+
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    parsed = null;
+  }
+
+  // fallback se vier quebrado
+  if (!parsed || typeof parsed.reply !== "string") {
+    parsed = {
+      reply:
+        "Pego! Só me confirma uma coisa pra eu te responder certinho: você quer falar da Galeria Suíça, da Vila Germânica ou da SmartTap?",
+      confidence: 0.3,
+      send_regua_image: false,
+      handoff: "none",
+      one_question:
+        "Você quer falar da Galeria Suíça, da Vila Germânica ou da SmartTap?",
+    };
+  }
+
+  return parsed;
 }
 
-/* -----------------------------
-   ROTAS
--------------------------------- */
+// ===== Routes =====
 app.get("/", (req, res) => {
-  res.send("Chatbot Arsenal/SmartTap está rodando.");
+  res.send("Chatbot Arsenal está rodando.");
 });
 
 app.get("/webhook", (req, res) => {
@@ -479,134 +311,114 @@ app.get("/webhook", (req, res) => {
   const token = req.query["hub.verify_token"];
   const challenge = req.query["hub.challenge"];
 
-  if (mode && token === VERIFY_TOKEN) return res.status(200).send(challenge);
-  return res.sendStatus(403);
+  if (mode && token === VERIFY_TOKEN) {
+    return res.status(200).send(challenge);
+  }
+  res.sendStatus(403);
 });
 
 app.post("/webhook", async (req, res) => {
   try {
-    const msgData = req.body.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
-    const from = msgData?.from;
-    const messageId = msgData?.id;
-    const message = msgData?.text?.body;
+    const message =
+      req.body.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.text?.body;
 
-    if (!from || !message) return res.sendStatus(200);
+    const from = req.body.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.from;
 
-    // dedupe: evita respostas duplicadas
-    if (messageId && processedMessages.has(messageId)) return res.sendStatus(200);
-    if (messageId) processedMessages.add(messageId);
+    if (!message || !from) return res.sendStatus(200);
 
-    const session = getSession(from);
-    pushHistory(session, "user", message);
+    // ignora mensagens que não são texto (opcional)
+    // const msgType = req.body.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.type;
+    // if (msgType && msgType !== "text") return res.sendStatus(200);
 
-    const intent = detectIntent(message, session);
-
-    let reply = null;
-
-    switch (intent) {
-      case "HOURS_ALL":
-        reply = replyHoursAll();
-        break;
-
-      case "ADDRESS_ALL":
-        // pede escolha para mandar mapa certo
-        session.state.waiting = "MAPS_STORE_CHOICE";
-        reply =
-          replyAddressAll() +
-          `\n\nSe você me disser "Galeria Suíça" ou "Vila Germânica", eu te mando o link do Maps certinho.`;
-        break;
-
-      case "MAPS_ONE":
-        if (session.state.lastStore) {
-          await sendMapsLink(from, session.state.lastStore);
-          session.state.waiting = null;
-          pushHistory(session, "assistant", `Enviei mapa: ${session.state.lastStore}`);
-          return res.sendStatus(200);
-        }
-        reply = replyAddressAll();
-        session.state.waiting = "MAPS_STORE_CHOICE";
-        break;
-
-      case "SEND_MAPS_AFTER_CHOICE":
-        // se pessoa respondeu “sim/pode” mas não disse qual loja, pergunta de forma simples
-        reply = `Perfeito. Qual loja você quer no Maps, Galeria Suíça ou Vila Germânica?`;
-        session.state.waiting = "MAPS_STORE_CHOICE";
-        break;
-
-      case "TASTING":
-        reply = replyTasting();
-        break;
-
-      case "KIT":
-        reply = replyKit();
-        break;
-
-      case "PET":
-        reply = `${BUSINESS.arsenal.policies.pet} 🐾`;
-        break;
-
-      case "RESERVATIONS":
-        reply = BUSINESS.arsenal.policies.reservations;
-        break;
-
-      case "ONLINE":
-        reply = replyOnline();
-        break;
-
-      case "INFLUENCER":
-        reply = replyInfluencer();
-        break;
-
-      case "SUPPLIER":
-        reply = replySupplier();
-        break;
-
-      case "SMARTTAP_HELP":
-        reply = replySmartTapHelp();
-        break;
-
-      case "SMARTTAP_NO_CPF":
-        reply = replySmartTapNoCPF();
-        break;
-
-      case "FRANCHISE":
-        reply = replyFranchiseLead();
-        break;
-
-      case "AI":
-      default:
-        reply = await askOpenAI(session, message);
-        break;
+    // Se for só saudação, dá um menu rápido e humano
+    if (isGreeting(message)) {
+      const hi =
+        "Olá! Bem-vindo ao Arsenal da Cerveja 🍻\n\n" +
+        "Este é nosso atendimento oficial para as lojas do Arsenal em Monte Verde e também para a SmartTap.\n\n" +
+        "Quer falar sobre:\n" +
+        "1) Horários e localização\n" +
+        "2) Régua degustação e chopes\n" +
+        "3) Cardápio (Galeria Suíça)\n" +
+        "4) SmartTap (suporte)\n\n" +
+        "Me diz o número ou a sua dúvida 😉";
+      await sleep(humanDelayMs(hi));
+      await sendWhatsAppText(from, hi);
+      return res.sendStatus(200);
     }
 
-    // se o usuário digita o nome da loja enquanto estava esperando escolha
-    const n = normalize(message);
-    if (session.state.waiting === "MAPS_STORE_CHOICE") {
-      if (n.includes("suica") || n.includes("suiça") || n.includes("lago")) {
-        session.state.lastStore = "galeriaSuica";
-        session.state.waiting = null;
-        await sendMapsLink(from, "galeriaSuica");
-        pushHistory(session, "assistant", "Enviei mapa Galeria Suíça");
-        return res.sendStatus(200);
-      }
-      if (n.includes("vila") || n.includes("germanica") || n.includes("germânica") || n.includes("bradesco")) {
-        session.state.lastStore = "vilaGermanica";
-        session.state.waiting = null;
-        await sendMapsLink(from, "vilaGermanica");
-        pushHistory(session, "assistant", "Enviei mapa Vila Germânica");
-        return res.sendStatus(200);
+    // grava user msg no histórico
+    pushHistory(from, "user", message);
+
+    const ai = await askOpenAI(from, message);
+
+    let reply = String(ai.reply || "").trim();
+    let confidence = typeof ai.confidence === "number" ? ai.confidence : 0.5;
+    const handoff = ai.handoff || "none";
+
+    // Se o modelo quiser perguntar 1 coisa, garante que termina com pergunta
+    const oneQuestion = String(ai.one_question || "").trim();
+    if (oneQuestion && !reply.endsWith("?")) {
+      reply = reply.replace(/\s+$/, "") + "\n\n" + oneQuestion;
+    }
+
+    // Handoffs
+    if (handoff === "kaique") {
+      reply += `\n\nSe quiser, fala direto com o Kaique aqui: ${KAIQUE_PHONE} 🍻`;
+    }
+
+    if (handoff === "rafa") {
+      reply += `\n\nPara fornecedores, pode falar direto com o responsável por aqui: ${RAFA_PHONE}`;
+    }
+
+    if (handoff === "kelvin") {
+      if (KELVIN_PHONE) {
+        reply += `\n\nParcerias e influenciadores: fala com o Kelvin por aqui: ${KELVIN_PHONE}`;
+      } else {
+        reply +=
+          "\n\nPode me mandar seu media kit por aqui mesmo (link + @ do Instagram) que nosso time de mídia retorna.";
       }
     }
 
+    // Site como último caso
+    if (handoff === "site" || confidence < 0.35) {
+      // Só usa site se realmente necessário
+      if (!reply.includes(ARSENAL_SITE_URL)) {
+        reply += `\n\nSe preferir, você também pode confirmar no nosso site: ${ARSENAL_SITE_URL}`;
+      }
+    }
+
+    // Delay humano
+    await sleep(humanDelayMs(reply));
+
+    // envia texto
     await sendWhatsAppText(from, reply);
-    pushHistory(session, "assistant", reply);
+
+    // manda imagem da régua se fizer sentido
+    const wantReguaImage =
+      Boolean(ai.send_regua_image) || shouldSendReguaImage(message, reply);
+
+    if (wantReguaImage) {
+      // pequena pausa pra parecer humano
+      await sleep(500 + Math.floor(Math.random() * 700));
+      await sendWhatsAppImage(
+        from,
+        REGUA_IMAGE_URL,
+        "🍻 Régua degustação do Arsenal. Você escolhe 4 estilos, 200ml cada taça."
+      );
+    }
+
+    // grava assistant reply no histórico
+    pushHistory(from, "assistant", reply);
 
     return res.sendStatus(200);
-  } catch (err) {
-    console.error("Erro webhook:", err.response?.data || err.message);
-    return res.sendStatus(200); // melhor responder 200 para a Meta não reenviar em loop
+  } catch (error) {
+    console.error("Webhook error:", error.response?.data || error.message);
+    return res.sendStatus(200); // evita que Meta re-tente e duplique mensagens
   }
 });
 
+// ===== Start =====
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`Servidor rodando na porta ${PORT}`);
+});
